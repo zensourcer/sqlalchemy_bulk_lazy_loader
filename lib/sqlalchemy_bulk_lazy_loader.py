@@ -178,6 +178,30 @@ class BulkLazyLoader(LazyLoader):
         current_model = state.obj()
         # Find all models in this session that also need this same relationship to be populated
         similar_models = self._get_similar_unpopulated_models(current_model, session)
+
+        # Reload expired models
+        # If we don't reload them now, _get_model_value will refetch them one
+        # by one, producing the n+1 query we were using this loader to avoid
+        expired_similar_models = [m for m in similar_models if inspect(m).expired]
+        expired_model_keys = []
+        for model in expired_similar_models:
+            identity = inspect(model).identity
+            expired_model_keys.append(identity)
+        if len(expired_model_keys) > 0:
+            model_class = current_model.__class__
+            primary_key_cols = inspect(model_class).primary_key
+            # Only handle models where there is a single primary key column,
+            # for simplicity
+            if len(primary_key_cols) == 1:
+                primary_key_col = primary_key_cols[0]
+                # Querying them without doing anything with the result is
+                # enough to unexpire the models in similar_models
+                session.query(
+                    model_class
+                ).filter(
+                    primary_key_col.in_(expired_model_keys)
+                ).all()
+
         param_value_to_models = {}
         param_values = set()
         for model in similar_models:
